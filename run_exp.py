@@ -64,6 +64,15 @@ def set_alg(conf, alg, **kwargs):
   return conf
 
 
+def set_repl(conf, repl_enabled, logger, ccc, worker_count, **kwargs):
+  conf = replace_def(conf, 'MICA_REPL_ENABLED', str(repl_enabled))
+  conf = replace_def(conf, 'MICA_LOGGER', str(logger))
+  conf = replace_def(conf, 'MICA_CCC', str(ccc))
+  conf = replace_def(conf, 'WORKER_CNT', str(worker_count))
+
+  return conf
+
+
 def set_ycsb(conf, thread_count, total_count, record_size, req_per_query, read_ratio, zipf_theta, tx_count, **kwargs):
   conf = replace_def(conf, 'WORKLOAD', 'YCSB')
   conf = replace_def(conf, 'WARMUP', str(int(tx_count / 3)))
@@ -92,6 +101,8 @@ def set_tpcc(conf, thread_count, bench, warehouse_count, tx_count, **kwargs):
   conf = replace_def(conf, 'INIT_PARALLELISM', str(warehouse_count))
   conf = replace_def(conf, 'PART_CNT', str(warehouse_count))
 
+  conf = set_repl(conf, **kwargs)
+
   if bench == 'TPCC':
     conf = replace_def(conf, 'TPCC_INSERT_ROWS', 'false')
     conf = replace_def(conf, 'TPCC_DELETE_ROWS', 'false')
@@ -106,6 +117,15 @@ def set_tpcc(conf, thread_count, bench, warehouse_count, tx_count, **kwargs):
     conf = replace_def(conf, 'TPCC_FULL', 'true')
   else:
     assert False
+
+  if 'perc_payment' in kwargs:
+    conf = replace_def(conf, 'PERC_PAYMENT', kwargs['perc_payment'])
+
+  if 'district_count' in kwargs:
+    conf = replace_def(conf, 'DIST_PER_WARE', kwargs['district_count'])
+
+  if 'customer_count' in kwargs:
+    conf = replace_def(conf, 'CUST_PER_DIST', kwargs['customer_count'])
 
   if 'simple_index_update' in kwargs:
     conf = replace_def(conf, 'TPCC_VALIDATE_GAP', 'false')
@@ -123,6 +143,56 @@ def set_tatp(conf, thread_count, scale_factor, tx_count, **kwargs):
   conf = replace_def(conf, 'TATP_SCALE_FACTOR', str(scale_factor))
   conf = replace_def(conf, 'INIT_PARALLELISM', str(thread_count))
   conf = replace_def(conf, 'PART_CNT', str(min(2, thread_count))) # try to use both NUMA node, but do not create too many partitions
+
+  return conf
+
+
+def set_insert(conf, inserts_per_txn, tx_count, **kwargs):
+
+  conf = replace_def(conf, 'WORKLOAD', 'INSERT')
+  conf = replace_def(conf, 'WARMUP', str(0))
+
+  conf = set_repl(conf, **kwargs)
+
+  conf = replace_def(conf, 'MAX_TXN_PER_PART', str(tx_count))
+  conf = replace_def(conf, 'MAX_TUPLE_SIZE', str(8))
+  conf = replace_def(conf, 'PART_CNT', str(1))
+
+  conf = replace_def(conf, 'INSERT_INSERTS_PER_TXN', str(inserts_per_txn))
+
+
+  return conf
+
+
+def set_update(conf, total_count, updates_per_txn, tx_count, **kwargs):
+
+  conf = replace_def(conf, 'WORKLOAD', 'UPDATE')
+  conf = replace_def(conf, 'WARMUP', str(0))
+  conf = replace_def(conf, 'SYNTH_TABLE_SIZE', str(total_count))
+
+  conf = set_repl(conf, **kwargs)
+
+  conf = replace_def(conf, 'MAX_TXN_PER_PART', str(tx_count))
+  conf = replace_def(conf, 'MAX_TUPLE_SIZE', str(8))
+  conf = replace_def(conf, 'PART_CNT', str(1))
+
+  conf = replace_def(conf, 'UPDATE_UPDATES_PER_TXN', str(updates_per_txn))
+
+  return conf
+
+
+def set_adversarial(conf, inserts_per_txn, tx_count, **kwargs):
+
+  conf = replace_def(conf, 'WORKLOAD', 'ADVERSARIAL')
+  conf = replace_def(conf, 'WARMUP', str(0))
+
+  conf = set_repl(conf, **kwargs)
+
+  conf = replace_def(conf, 'MAX_TXN_PER_PART', str(tx_count))
+  conf = replace_def(conf, 'MAX_TUPLE_SIZE', str(8))
+  conf = replace_def(conf, 'PART_CNT', str(1))
+
+  conf = replace_def(conf, 'ADVERSARIAL_INSERTS_PER_TXN', str(inserts_per_txn))
 
   return conf
 
@@ -181,9 +251,9 @@ hugepage_count = {
   'SILO': 32 * 1024 / 2,
   'TICTOC': 32 * 1024 / 2,
   'NO_WAIT': 32 * 1024 / 2,
-  # 32 GiB + (16 GiB for RCU)
-  'MICA': (32 + 16) * 1024 / 2,
-  'MICA+INDEX': (32 + 16) * 1024 / 2,
+  # 32 GiB + 16 GiB for RCU + 32 GiB for logging
+  'MICA': (32 + 16 + 32) * 1024 / 2,
+  'MICA+INDEX': (32 + 16 + 32) * 1024 / 2,
   # 96 GiB
   'HEKATON': 96 * 1024 / 2,
 
@@ -275,17 +345,17 @@ def format_exp(exp):
 
 def enum_exps(seq):
   all_algs = ['MICA', 'MICA+INDEX', #'MICA+FULLINDEX',
-              'SILO', 'TICTOC', 'HEKATON', 'NO_WAIT',
-              'SILO-REF',
+              # 'SILO', 'TICTOC', 'HEKATON', 'NO_WAIT',
+              # 'SILO-REF',
               # 'SILO-REF-BACKOFF',
               #'ERMIA-SI-REF',
               #'ERMIA-SSI-REF',
-              'ERMIA-SI_SSN-REF',
+              # 'ERMIA-SI_SSN-REF',
               # 'ERMIA-SI-REF-BACKOFF',
               # 'ERMIA-SSI-REF-BACKOFF',
               # 'ERMIA-SI_SSN-REF-BACKOFF',
-              'FOEDUS-MOCC-REF',
-              'FOEDUS-OCC-REF',
+              # 'FOEDUS-MOCC-REF',
+              # 'FOEDUS-OCC-REF',
              ]
 
   macrobenchs = ['macrobench']
@@ -301,7 +371,7 @@ def enum_exps(seq):
       if tag == 'native-macrobench' and alg not in ('MICA', 'MICA+INDEX', 'MICA+FULLINDEX'):
         continue
 
-      for thread_count in [1, 2] + list(range(4, max_thread_count + 1, 4)):
+      for thread_count in [1, 2, 3] + list(range(4, max_thread_count + 1, 2)):
         common = { 'seq': seq, 'tag': tag, 'alg': alg, 'thread_count': thread_count }
 
         if alg in ('FOEDUS-MOCC-REF', 'FOEDUS-OCC-REF') and thread_count < 4:
@@ -342,61 +412,177 @@ def enum_exps(seq):
               ycsb.update({ 'read_ratio': read_ratio, 'zipf_theta': zipf_theta })
               yield dict(ycsb)
 
+        # INSERT
+        if alg in ('MICA',):
+          insert = dict(common)
+          tx_count = 2000000
+          insert.update({ 'bench': 'INSERT', 'tx_count': tx_count, 'inserts_per_txn': 1,
+                          'worker_count': 0 })
+
+          insert.update({ 'repl_enabled': 'false', 'logger': 'MICA_LOG_NULL', 'ccc': 'MICA_CCC_NONE' })
+          yield dict(insert) # replication disabled
+
+          worker_counts = {
+            1: 1, 2: 1, 3: 2, 4: 2, 6: 2, 8: 4, 10: 4,
+            12: 4, 14: 4, 16: 8, 18: 8, 20: 8,
+          }
+
+          # replication enabled
+          for ccc in ['MICA_CCC_COPYCAT', 'MICA_CCC_KUAFU']:
+            insert.update({ 'repl_enabled': 'true', 'logger': 'MICA_LOG_MMAP', 'ccc': ccc,
+                            'worker_count': worker_counts[thread_count] })
+            yield dict(insert)
+
+        # UPDATE
+        if alg in ('MICA',):
+          update = dict(common)
+          total_count = int(1e6)
+          tx_count = 2000000
+          update.update({ 'bench': 'UPDATE', 'total_count': total_count,
+                          'tx_count': tx_count, 'worker_count': 0 })
+
+          for updates_per_txn in [1]: # [1, 2, 4, 8]:
+            update.update({ 'updates_per_txn': updates_per_txn })
+            update.update({ 'repl_enabled': 'false', 'logger': 'MICA_LOG_NULL', 'ccc': 'MICA_CCC_NONE' })
+            yield dict(update) # replication disabled
+
+            worker_counts = {
+              1: 1, 2: 1, 3: 1, 4: 2, 6: 3, 8: 4, 10: 6,
+              12: 6, 14: 6, 16: 8, 18: 8, 20: 8,
+            }
+
+          # replication enabled
+          for ccc in ['MICA_CCC_COPYCAT', 'MICA_CCC_KUAFU']:
+            update.update({ 'repl_enabled': 'true', 'logger': 'MICA_LOG_MMAP', 'ccc': ccc,
+                            'worker_count': worker_counts[thread_count] })
+            yield dict(update)
+
+        # ADVERSARIAL
+        if alg in ('MICA',):
+          adversarial = dict(common)
+          adversarial.update({ 'bench': 'ADVERSARIAL' })
+
+          tx_count = 16000000
+          for inserts_per_txn in [2**i for i in range(0, 8)]:
+            adversarial.update({ 'inserts_per_txn': inserts_per_txn,
+                                 'tx_count': int(tx_count/inserts_per_txn) })
+            if thread_count <= 3:
+              adversarial.update({ 'worker_count': 0 })
+
+              adversarial.update({ 'repl_enabled': 'false', 'logger': 'MICA_LOG_NULL',
+                                   'ccc': 'MICA_CCC_NONE' })
+              yield dict(adversarial) # replication disabled
+
+            if thread_count == 1:
+              worker_counts = {
+                1: 2, 2: 2, 4: 2, 8: 2, 16: 2, 32: 4, 64: 4, 128: 4,
+              }
+
+              # replication enabled
+              for ccc in ['MICA_CCC_COPYCAT', 'MICA_CCC_KUAFU']:
+                adversarial.update({ 'repl_enabled': 'true', 'logger': 'MICA_LOG_MMAP', 'ccc': ccc,
+                                     'worker_count': worker_counts[thread_count] })
+                yield dict(adversarial)
+
+
         # TPCC
         if alg.find('-REF') == -1:
           tpcc = dict(common)
-          tx_count = 200000
+          tx_count = 800000
           tpcc.update({ 'bench': 'TPCC', 'tx_count': tx_count })
 
           # for warehouse_count in [1, 4, 16, max_thread_count]:
           for warehouse_count in [1, 4, max_thread_count]:
             if tag != 'macrobench': continue
-            tpcc.update({ 'warehouse_count': warehouse_count })
-            yield dict(tpcc)
+            tpcc.update({ 'warehouse_count': warehouse_count, 'repl_enabled': 'false',
+                          'logger': 'MICA_LOG_NULL', 'ccc': 'MICA_CCC_NONE',
+                          'worker_count': 0 })
+            yield dict(tpcc) # replication disabled
+
+            # replication enabled
+            if thread_count != 1: continue
+            for ccc in ['MICA_CCC_COPYCAT', 'MICA_CCC_KUAFU']:
+              for worker_count in [1, 2, 4, 8]:
+                tpcc.update({ 'repl_enabled': 'true', 'logger': 'MICA_LOG_MMAP',
+                              'ccc': ccc, 'worker_count': worker_count })
+                yield dict(tpcc)
 
           for warehouse_count in [1, 2] + list(range(4, max_thread_count + 1, 4)):
             if tag != 'macrobench': continue
             if thread_count not in [max_thread_count, warehouse_count]: continue
-            tpcc.update({ 'warehouse_count': warehouse_count })
-            yield dict(tpcc)
+            tpcc.update({ 'warehouse_count': warehouse_count, 'repl_enabled': 'false',
+                          'logger': 'MICA_LOG_NULL', 'ccc': 'MICA_CCC_NONE',
+                          'worker_count': 0 })
+            yield dict(tpcc) # replication disabled
 
-        # full TPCC
+            # replication enabled
+            if thread_count != 1: continue
+            for ccc in ['MICA_CCC_COPYCAT', 'MICA_CCC_KUAFU']:
+              for worker_count in [1, 2, 4, 8]:
+                tpcc.update({ 'repl_enabled': 'true', 'logger': 'MICA_LOG_MMAP',
+                              'ccc': ccc, 'worker_count': worker_count })
+                yield dict(tpcc)
+
+        # TPCC-FULL
         if alg not in ('MICA',):  # MICA must use the native index
           tpcc = dict(common)
-          tx_count = 200000
-          tpcc.update({ 'bench': 'TPCC-FULL', 'tx_count': tx_count })
+          tx_count = 1000000//thread_count
+          for perc_payment in [0.0, 0.5, 1.0]:
+            for warehouse_count in [1]: #[1, 2, 4] + list(range(4, max_thread_count + 1, 4)):
+              for district_count in [2, 4, 8]: #[1, 2, 4, 6, 8, 10, 12]:
+                for customer_count in [3000]: #[1000, 2000, 3000]:
+                  if tag != 'macrobench': continue
+                  tpcc.update({ 'bench': 'TPCC-FULL', 'tx_count': tx_count,
+                                'repl_enabled': 'false', 'logger': 'MICA_LOG_NONE',
+                                'ccc': 'MICA_CCC_NONE', 'worker_count': 0,
+                                'perc_payment': perc_payment })
 
-          # for warehouse_count in [1, 4, 16, max_thread_count]:
-          for warehouse_count in [1, 4, max_thread_count]:
-            if tag != 'macrobench': continue
-            tpcc.update({ 'warehouse_count': warehouse_count })
-            yield dict(tpcc)
+                  tpcc.update({ 'warehouse_count': warehouse_count,
+                                'district_count': district_count,
+                                'customer_count': customer_count })
+                  yield dict(tpcc) # replication disabled
 
-          for warehouse_count in [1, 2] + list(range(4, max_thread_count + 1, 4)):
-            if tag != 'macrobench': continue
-            if thread_count not in [max_thread_count, warehouse_count]: continue
-            tpcc.update({ 'warehouse_count': warehouse_count })
-            yield dict(tpcc)
+                  # replication enabled
+                  if thread_count != 1: continue
+                  for ccc in ['MICA_CCC_KUAFU', 'MICA_CCC_COPYCAT']:
+                    for worker_count in range(1, 11):
+                      tpcc.update({ 'repl_enabled': 'true', 'logger': 'MICA_LOG_MMAP',
+                                    'ccc': ccc, 'worker_count': worker_count })
+                      yield dict(tpcc)
+
+          #for warehouse_count in [1, 2] + list(range(4, max_thread_count + 1, 4)):
+          #  if tag != 'macrobench': continue
+          #  if thread_count not in [max_thread_count, warehouse_count]: continue
+          #  tpcc.update({ 'warehouse_count': warehouse_count })
+          #  yield dict(tpcc) # replication disabled
+
+          #  # replication enabled
+          #  if thread_count != 1: continue
+          #  for ccc in ['MICA_CCC_KUAFU']:
+          #    for worker_count in range(1, 11):
+          #      tpcc.update({ 'repl_enabled': 'true', 'logger': 'MICA_LOG_MMAP',
+          #                    'ccc': ccc, 'worker_count': worker_count })
+          #      yield dict(tpcc)
 
         # full TPCC with simple index update
         # (delayed index update, no phantom avoidance)
-        if alg not in ('MICA',) and alg.find('-REF') == -1:
-          tpcc = dict(common)
-          tx_count = 200000
-          tpcc.update({ 'bench': 'TPCC-FULL', 'tx_count': tx_count,
-            'simple_index_update': 1 })
+        # if alg not in ('MICA',) and alg.find('-REF') == -1:
+        #   tpcc = dict(common)
+        #   tx_count = 200000
+        #   tpcc.update({ 'bench': 'TPCC-FULL', 'tx_count': tx_count,
+        #     'simple_index_update': 1 })
 
-          # for warehouse_count in [1, 4, 16, max_thread_count]:
-          for warehouse_count in [1, 4, max_thread_count]:
-            if tag != 'macrobench': continue
-            tpcc.update({ 'warehouse_count': warehouse_count })
-            yield dict(tpcc)
+        #   # for warehouse_count in [1, 4, 16, max_thread_count]:
+        #   for warehouse_count in [1, 4, max_thread_count]:
+        #     if tag != 'macrobench': continue
+        #     tpcc.update({ 'warehouse_count': warehouse_count })
+        #     yield dict(tpcc)
 
-          for warehouse_count in [1, 2] + list(range(4, max_thread_count + 1, 4)):
-            if tag != 'macrobench': continue
-            if thread_count not in [max_thread_count, warehouse_count]: continue
-            tpcc.update({ 'warehouse_count': warehouse_count })
-            yield dict(tpcc)
+        #   for warehouse_count in [1, 2] + list(range(4, max_thread_count + 1, 4)):
+        #     if tag != 'macrobench': continue
+        #     if thread_count not in [max_thread_count, warehouse_count]: continue
+        #     tpcc.update({ 'warehouse_count': warehouse_count })
+        #     yield dict(tpcc)
 
         # TATP
         # if alg.find('-REF') == -1:
@@ -749,6 +935,12 @@ def update_conf(conf, exp):
     conf = set_tpcc(conf, **exp)
   elif exp['bench'] == 'TATP':
     conf = set_tatp(conf, **exp)
+  elif exp['bench'] == 'INSERT':
+    conf = set_insert(conf, **exp)
+  elif exp['bench'] == 'UPDATE':
+    conf = set_update(conf, **exp)
+  elif exp['bench'] == 'ADVERSARIAL':
+    conf = set_adversarial(conf, **exp)
   else: assert False
   if exp['alg'].startswith('MICA') or exp['tag'] == 'backoff':
     conf = set_mica_confs(conf, **exp)
@@ -1124,6 +1316,13 @@ def run(exp, prepare_only):
 
   # run
   for trial in range(max_retries):
+    os.system('rm -f /mnt/huge/cicada/log/init/*')
+    os.system('rm -f /mnt/huge/cicada/log/warmup/*')
+    os.system('rm -f /mnt/huge/cicada/log/workload/*')
+    os.system('rm -f /mnt/huge/cicada/relay/init/*')
+    os.system('rm -f /mnt/huge/cicada/relay/warmup/*')
+    os.system('rm -f /mnt/huge/cicada/relay/workload/*')
+
     p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     #p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
@@ -1189,6 +1388,8 @@ def run_all(pats, prepare_only):
 
   exps = list(sort_exps(exps))
   print('total %d exps to run' % len(exps))
+
+  print(exps)
 
   count_per_tag = {}
   for exp in exps:
